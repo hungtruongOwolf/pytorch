@@ -173,8 +173,30 @@ Three pins are needed because PyTorch 2.3.0 predates breaking changes elsewhere:
 ## Rebuilding after editing the source
 
 ```bash
-bash research/build.sh          # incremental: minutes, not hours
+bash research/build.sh          # incremental
 ```
+
+Measured on the reference machine: touching one CUDA source
+(`aten/src/ATen/native/cuda/ActivationGeluKernel.cu`) recompiled it and relinked
+the 213 MB `libtorch_cuda.so` in **about 20 seconds**, against ~2 hours for the
+first build.
+
+`setup.py develop` filters ninja's output, so the build log shows no
+`Building`/`Linking` lines even when work was done. To confirm a rebuild really
+happened, compare timestamps rather than reading the log:
+
+```bash
+ls -la --time-style=+%T aten/src/ATen/native/cuda/ActivationGeluKernel.cu
+find build -name ActivationGeluKernel.cu.o -exec ls -la --time-style=+%T {} +
+find build -name libtorch_cuda.so -exec ls -la --time-style=+%T {} +
+```
+
+The object and the library must be newer than the source. A rebuild that
+finishes in seconds with the object *unchanged* means ninja saw no work — usually
+because the edited path does not exist. `touch` on a wrong path silently creates
+a new file instead of failing, so that mistake is easy to miss. PyTorch 2.3.0
+splits activations into `Activation*Kernel.cu` files; there is no
+`aten/src/ATen/native/cuda/Activation.cu`.
 
 Editing a Python file under `torch/` needs no rebuild — `setup.py develop`
 installs a link to this tree. Cleaning, from cheapest to most destructive:
