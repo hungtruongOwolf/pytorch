@@ -1,0 +1,146 @@
+Collecting environment information...
+PyTorch version: 2.3.0a0+git97ff6cf
+Is debug build: False
+CUDA used to build PyTorch: 12.1
+ROCM used to build PyTorch: N/A
+
+OS: Ubuntu 22.04.5 LTS (x86_64)
+GCC version: (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0
+Clang version: Could not collect
+CMake version: version 3.31.8
+Libc version: glibc-2.35
+
+Python version: 3.10.21 | packaged by conda-forge | (main, Aug 21 2026, 22:42:31) [GCC 14.4.0] (64-bit runtime)
+Python platform: Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.35
+Is CUDA available: True
+CUDA runtime version: 12.1.105
+CUDA_MODULE_LOADING set to: LAZY
+GPU models and configuration: GPU 0: NVIDIA GeForce RTX 3050 Ti Laptop GPU
+Nvidia driver version: Could not collect
+cuDNN version: Probably one of the following:
+/usr/local/cuda-12.1/targets/x86_64-linux/lib/libcudnn.so.8.9.7
+/usr/local/cuda-12.1/targets/x86_64-linux/lib/libcudnn_adv_infer.so.8.9.7
+/usr/local/cuda-12.1/targets/x86_64-linux/lib/libcudnn_adv_train.so.8.9.7
+/usr/local/cuda-12.1/targets/x86_64-linux/lib/libcudnn_cnn_infer.so.8.9.7
+/usr/local/cuda-12.1/targets/x86_64-linux/lib/libcudnn_cnn_train.so.8.9.7
+/usr/local/cuda-12.1/targets/x86_64-linux/lib/libcudnn_ops_infer.so.8.9.7
+/usr/local/cuda-12.1/targets/x86_64-linux/lib/libcudnn_ops_train.so.8.9.7
+HIP runtime version: N/A
+MIOpen runtime version: N/A
+Is XNNPACK available: True
+
+CPU:
+Architecture:                            x86_64
+CPU op-mode(s):                          32-bit, 64-bit
+Address sizes:                           39 bits physical, 48 bits virtual
+Byte Order:                              Little Endian
+CPU(s):                                  16
+On-line CPU(s) list:                     0-15
+Vendor ID:                               GenuineIntel
+Model name:                              11th Gen Intel(R) Core(TM) i7-11800H @ 2.30GHz
+CPU family:                              6
+Model:                                   141
+Thread(s) per core:                      2
+Core(s) per socket:                      8
+Socket(s):                               1
+Stepping:                                1
+BogoMIPS:                                4608.00
+Flags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ss ht syscall nx pdpe1gb rdtscp lm constant_tsc arch_perfmon rep_good nopl xtopology tsc_reliable nonstop_tsc cpuid tsc_known_freq pni pclmulqdq vmx ssse3 fma cx16 pdcm pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm abm 3dnowprefetch ssbd ibrs ibpb stibp ibrs_enhanced tpr_shadow ept vpid ept_ad fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves vnmi avx512vbmi umip avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid movdiri movdir64b fsrm avx512_vp2intersect md_clear ibt flush_l1d arch_capabilities
+Virtualization:                          VT-x
+Hypervisor vendor:                       Microsoft
+Virtualization type:                     full
+L1d cache:                               384 KiB (8 instances)
+L1i cache:                               256 KiB (8 instances)
+L2 cache:                                10 MiB (8 instances)
+L3 cache:                                24 MiB (1 instance)
+NUMA node(s):                            1
+NUMA node0 CPU(s):                       0-15
+Vulnerability Gather data sampling:      Not affected
+Vulnerability Ghostwrite:                Not affected
+Vulnerability Indirect target selection: Mitigation; Aligned branch/return thunks
+Vulnerability Itlb multihit:             Not affected
+Vulnerability L1tf:                      Not affected
+Vulnerability Mds:                       Not affected
+Vulnerability Meltdown:                  Not affected
+Vulnerability Mmio stale data:           Not affected
+Vulnerability Old microcode:             Not affected
+Vulnerability Reg file data sampling:    Not affected
+Vulnerability Retbleed:                  Mitigation; Enhanced IBRS
+Vulnerability Spec rstack overflow:      Not affected
+Vulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl
+Vulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization
+Vulnerability Spectre v2:                Mitigation; Enhanced / Automatic IBRS; IBPB conditional; PBRSB-eIBRS SW sequence; BHI SW loop, KVM SW loop
+Vulnerability Srbds:                     Not affected
+Vulnerability Tsa:                       Not affected
+Vulnerability Tsx async abort:           Not affected
+Vulnerability Vmscape:                   Not affected
+
+Versions of relevant libraries:
+[pip3] numpy==1.26.4
+[pip3] optree==0.20.0
+[pip3] torch==2.3.0a0+git97ff6cf
+[conda] mkl-include                2026.1.0            ha770c72_245           conda-forge
+[conda] mkl-static                 2026.1.0            ha770c72_245           conda-forge
+[conda] numpy                      1.26.4              pypi_0                 pypi
+[conda] optree                     0.20.0              pypi_0                 pypi
+[conda] torch                      2.3.0a0+git97ff6cf  dev_0                  <develop>
+PyTorch v2.3.0 source build -- check
+host DESKTOP-2ASJTAS, 2026-09-20T21:18:39-05:00
+
+Operating system
+  Ubuntu 22.04.5 LTS, kernel 6.18.33.2-microsoft-standard-WSL2, x86_64
+  [ ok ]  Debian-family distribution
+  [warn]  Running under WSL: CUPTI/Nsight kernel profiling is limited, and the
+  [warn]  repository must live under the Linux home directory, not /mnt/*
+
+CPU and memory
+  16 CPU threads, 11 GB RAM, 24 GB swap
+  [ ok ]  Memory is sufficient for MAX_JOBS=5
+
+Disk
+  /home/hungtruong/pytorch: 933 GB free (ext4)
+  [ ok ]  Ample space for source, build artifacts and ccache
+
+NVIDIA driver and GPU
+  GPU 0, NVIDIA GeForce RTX 3050 Ti Laptop GPU, 8.6, 4096 MiB
+  [ ok ]  Driver 610.60
+  [ ok ]  Will compile for architecture(s): 8.6
+
+CUDA toolkit
+  [ ok ]  nvcc 12.1 at /usr/local/cuda-12.1
+  [ ok ]  CUDA 12.1 is officially supported by PyTorch 2.3.0
+  [ ok ]  cuDNN 8.9.7
+
+Host compiler
+  default gcc 11.4.0
+  [ ok ]  gcc 11 is accepted by CUDA 12.1 (maximum 12)
+
+Build tooling
+  [ ok ]  git present
+  [ ok ]  ninja present
+  [ ok ]  cmake 3.31.8
+  [ ok ]  ccache present, max size 25.0G
+
+Python environment
+  [ ok ]  conda env /home/hungtruong/miniconda3/envs/pt230
+  [ ok ]  Python 3.10
+  [ ok ]  numpy 1.26.4
+  [ ok ]  setuptools 69.5.1
+
+Source tree
+  [ ok ]  PyTorch 2.3.0a0 at /home/hungtruong/pytorch
+  [ ok ]  Submodules initialised
+
+------------------------------------------------------------------
+Build plan
+  GPU                   NVIDIA GeForce RTX 3050 Ti Laptop GPU  (arch 8.6)
+  CUDA                  12.1  at /usr/local/cuda-12.1
+  Host compiler         /usr/bin/g++
+  Parallel jobs         5  (from 16 threads, 11 GB RAM)
+  conda env             /home/hungtruong/miniconda3/envs/pt230  (Python 3.10)
+  USE_CUDA / USE_CUDNN  1 / 1
+  USE_NCCL / BUILD_TEST 0 / 0
+  Source                /home/hungtruong/pytorch
+  Checks                19 ok, 2 warning(s), 0 failure(s)
+------------------------------------------------------------------
+Ready to build: bash research/build.sh
