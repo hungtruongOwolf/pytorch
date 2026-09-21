@@ -7,6 +7,24 @@ every machine has to build it once. `research/build.sh` does that, detecting the
 GPU architecture, CUDA version, host compiler and job count from the host it runs
 on — nothing here needs editing for a different GPU.
 
+## Start here
+
+| Step | What | How long |
+|---|---|---|
+| 1 | Check the requirements table below | 2 min |
+| 2 | Install whatever is missing — *Prerequisites* | 20-60 min, often nothing |
+| 3 | Clone the branch and build the conda environment — *Quick start A* | ~30 min, mostly downloading |
+| 4 | Build | 1-4 hours, unattended |
+| 5 | Verify | 1 min |
+
+**If `nvidia-smi`, `nvcc --version` and `conda --version` all work already, skip
+straight to *Quick start*.** The Prerequisites section only exists to get those
+three commands working; there is nothing else in it.
+
+Everything from *What build.sh detects* onward is reference material — read it
+when something goes wrong or when you want to change a default, not on the way
+through.
+
 ## Requirements
 
 | | |
@@ -265,76 +283,6 @@ Then copy this `research/` directory in and commit it. Pushing a branch based on
 an old tag needs a token with the `workflow` scope, because it creates files
 under `.github/workflows/`.
 
-## What build.sh detects
-
-| Setting | Source |
-|---|---|
-| `TORCH_CUDA_ARCH_LIST` | `nvidia-smi --query-gpu=compute_cap`, deduplicated and sorted |
-| `MAX_JOBS` | `min(nproc, RAM_GB / 2)` — PyTorch needs ~2 GB of RAM per compile job, and link steps peak higher |
-| `CUDA_HOME` | explicit value, else `nvcc` on `PATH`, else the newest `/usr/local/cuda-*` |
-| `CC`, `CXX`, `CUDAHOSTCXX` | the newest installed `gcc-N` that the detected CUDA accepts |
-| `USE_NCCL` | `1` when the host has more than one GPU |
-| `USE_CUDA`, `USE_CUDNN` | `1` when a toolkit is found |
-
-Compiling device code only for the architectures present is the largest available
-build-time saving. Left unset, `nvcc` compiles every architecture PyTorch
-supports — several times slower, with nothing usable to show for it. Conversely,
-a hardcoded architecture produces a build that succeeds and then fails at run
-time with `no kernel image is available for execution on the device`, which is
-why this is detected rather than written down.
-
-On a cluster that provides CUDA through environment modules, `module load
-cuda/12.1` is enough: `build.sh` finds it on `PATH`.
-
-### Building where no GPU is visible
-
-A cluster login node usually has no GPU, so architecture detection cannot work
-and `build.sh` stops. Compiling there is still legitimate — name the target
-architecture explicitly and it proceeds with a warning:
-
-```bash
-TORCH_CUDA_ARCH_LIST="8.0" bash research/build.sh     # A100
-TORCH_CUDA_ARCH_LIST="9.0" bash research/build.sh     # H100
-```
-
-Look the value up with `nvidia-smi --query-gpu=compute_cap --format=csv,noheader`
-on a compute node, or from NVIDIA's compute-capability table. Getting it wrong
-produces a build that finishes and then fails at run time with `no kernel image
-is available for execution on the device`.
-
-Run `build.sh verify` on a node that has the GPU, not on the login node.
-
-`MAX_JOBS` is a ceiling, not a target to beat. The 2 GB-per-job estimate holds
-for ordinary sources, but the FlashAttention kernels under
-`aten/src/ATen/native/transformers/cuda/flash_attn/` take **3-6 GB each** — they
-are CUTLASS templates, and nvcc has to expand the whole instantiation tree in
-memory. On a 16 GB host, raising `MAX_JOBS` to 8 puts the machine into swap
-thrashing during that stretch and makes the build *slower*, not faster. See
-the troubleshooting entry below for how to tell thrashing from slow compiling.
-
-## Overrides
-
-Any detected value can be replaced for a single invocation:
-
-```bash
-MAX_JOBS=32 bash research/build.sh                  # a large workstation
-TORCH_CUDA_ARCH_LIST="9.0" bash research/build.sh   # cross-compile for H100
-ARCH_PTX=1 bash research/build.sh                   # also embed PTX (see below)
-BUILD_TEST=1 bash research/build.sh                 # also build C++ test binaries
-USE_CUDA=0 bash research/build.sh                   # CPU-only build
-ASSUME_YES=1 bash research/build.sh                 # no confirmation prompt
-```
-
-`ARCH_PTX=1` appends `+PTX` to the highest architecture, embedding intermediate
-code that can be JIT-compiled onto a *newer* GPU than the build host. It costs
-build time and binary size, so it is off by default; enable it when one build has
-to serve machines with different GPUs.
-
-Two flags are deliberately not left to chance. `BUILD_TEST=0` skips the C++ test
-binaries, a large share of build time that is not needed to use or modify PyTorch
-from Python. `USE_KINETO=1` stays on: Kineto is the CUPTI-based backend behind
-`torch.profiler`, and kernel-level measurement is the point of this work.
-
 ## Version pins
 
 Three pins are needed because PyTorch 2.3.0 predates breaking changes elsewhere:
@@ -432,6 +380,84 @@ in flight are lost and the rerun resumes from there.
 On the reference machine, `MAX_JOBS=8` gave `si 38633 / so 33988`, `wa 45 %` and
 only 7 % user CPU — the build was moving data, not compiling. At `MAX_JOBS=3` the
 same host showed `wa 0-5 %` with swap nearly untouched.
+
+---
+
+# Reference
+
+The sections above are the path through a first build, in order. What follows is
+looked up as needed.
+
+## What build.sh detects
+
+| Setting | Source |
+|---|---|
+| `TORCH_CUDA_ARCH_LIST` | `nvidia-smi --query-gpu=compute_cap`, deduplicated and sorted |
+| `MAX_JOBS` | `min(nproc, RAM_GB / 2)` — PyTorch needs ~2 GB of RAM per compile job, and link steps peak higher |
+| `CUDA_HOME` | explicit value, else `nvcc` on `PATH`, else the newest `/usr/local/cuda-*` |
+| `CC`, `CXX`, `CUDAHOSTCXX` | the newest installed `gcc-N` that the detected CUDA accepts |
+| `USE_NCCL` | `1` when the host has more than one GPU |
+| `USE_CUDA`, `USE_CUDNN` | `1` when a toolkit is found |
+
+Compiling device code only for the architectures present is the largest available
+build-time saving. Left unset, `nvcc` compiles every architecture PyTorch
+supports — several times slower, with nothing usable to show for it. Conversely,
+a hardcoded architecture produces a build that succeeds and then fails at run
+time with `no kernel image is available for execution on the device`, which is
+why this is detected rather than written down.
+
+On a cluster that provides CUDA through environment modules, `module load
+cuda/12.1` is enough: `build.sh` finds it on `PATH`.
+
+### Building where no GPU is visible
+
+A cluster login node usually has no GPU, so architecture detection cannot work
+and `build.sh` stops. Compiling there is still legitimate — name the target
+architecture explicitly and it proceeds with a warning:
+
+```bash
+TORCH_CUDA_ARCH_LIST="8.0" bash research/build.sh     # A100
+TORCH_CUDA_ARCH_LIST="9.0" bash research/build.sh     # H100
+```
+
+Look the value up with `nvidia-smi --query-gpu=compute_cap --format=csv,noheader`
+on a compute node, or from NVIDIA's compute-capability table. Getting it wrong
+produces a build that finishes and then fails at run time with `no kernel image
+is available for execution on the device`.
+
+Run `build.sh verify` on a node that has the GPU, not on the login node.
+
+`MAX_JOBS` is a ceiling, not a target to beat. The 2 GB-per-job estimate holds
+for ordinary sources, but the FlashAttention kernels under
+`aten/src/ATen/native/transformers/cuda/flash_attn/` take **3-6 GB each** — they
+are CUTLASS templates, and nvcc has to expand the whole instantiation tree in
+memory. On a 16 GB host, raising `MAX_JOBS` to 8 puts the machine into swap
+thrashing during that stretch and makes the build *slower*, not faster. See
+*The build looks frozen about a third of the way through*, under Troubleshooting,
+for how to tell thrashing from slow compiling.
+
+## Overrides
+
+Any detected value can be replaced for a single invocation:
+
+```bash
+MAX_JOBS=32 bash research/build.sh                  # a large workstation
+TORCH_CUDA_ARCH_LIST="9.0" bash research/build.sh   # cross-compile for H100
+ARCH_PTX=1 bash research/build.sh                   # also embed PTX (see below)
+BUILD_TEST=1 bash research/build.sh                 # also build C++ test binaries
+USE_CUDA=0 bash research/build.sh                   # CPU-only build
+ASSUME_YES=1 bash research/build.sh                 # no confirmation prompt
+```
+
+`ARCH_PTX=1` appends `+PTX` to the highest architecture, embedding intermediate
+code that can be JIT-compiled onto a *newer* GPU than the build host. It costs
+build time and binary size, so it is off by default; enable it when one build has
+to serve machines with different GPUs.
+
+Two flags are deliberately not left to chance. `BUILD_TEST=0` skips the C++ test
+binaries, a large share of build time that is not needed to use or modify PyTorch
+from Python. `USE_KINETO=1` stays on: Kineto is the CUPTI-based backend behind
+`torch.profiler`, and kernel-level measurement is the point of this work.
 
 ## Recording a machine
 
