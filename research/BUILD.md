@@ -17,15 +17,15 @@ on — nothing here needs editing for a different GPU.
 | CUDA Toolkit | 11.8 or 12.1 (the versions PyTorch 2.3.0 officially targets) |
 | cuDNN | 8.9.x matching the CUDA version |
 | Python | 3.8-3.11, in a dedicated conda environment |
-| RAM | 16 GB comfortable, 8 GB workable with swap |
+| RAM | 32 GB comfortable; 16 GB workable but limits `MAX_JOBS` to about 5; 8 GB only with generous swap |
 | Disk | 50 GB minimum, 100 GB comfortable, on **ext4** — not NTFS |
 
 `build.sh check` verifies all of this and refuses to build until it is satisfied.
 
 ### On WSL2
 
-WSL2 builds and runs CUDA correctly, with three differences from native Linux.
-`build.sh` detects WSL and warns, but these steps are manual:
+WSL2 builds and runs CUDA correctly, but differs from native Linux in five ways.
+`build.sh` detects WSL and warns; the three setup steps below are manual:
 
 1. **Never install an NVIDIA driver inside WSL.** The GPU is borrowed from the
    Windows driver — that is why `nvidia-smi` works with no Linux driver present.
@@ -58,13 +58,13 @@ WSL2 builds and runs CUDA correctly, with three differences from native Linux.
    The large swap matters more than the memory: it is what keeps a peak link step
    from being OOM-killed an hour into a build.
 
-The repository must live in the Linux filesystem (`~/pytorch`). Building from
-`/mnt/c` or `/mnt/e` is 10-50x slower through the translation layer, and NTFS is
-case-insensitive, which breaks the build outright.
-
-Kernel profiling is the real limitation: CUPTI and Nsight hardware counters are
-restricted under WSL2. That does not affect building, but measuring a modified
-kernel eventually needs native Linux.
+4. **The repository must live in the Linux filesystem** (`~/pytorch`). Building
+   from `/mnt/c` or `/mnt/e` is 10-50x slower through the translation layer, and
+   NTFS is case-insensitive, which breaks the build outright.
+5. **Kernel profiling is restricted.** CUPTI and Nsight hardware counters are
+   limited under WSL2. This does not affect building — `torch.profiler` still
+   returns entries — but measuring a modified kernel properly eventually needs
+   native Linux.
 
 ## Quick start
 
@@ -88,14 +88,19 @@ pip install "numpy<2" "setuptools==69.5.1"   # see Version pins below
 conda install -y --override-channels -c conda-forge "cmake<4" ninja
 conda install -y --override-channels -c conda-forge mkl-static mkl-include
 conda install -y -c pytorch magma-cuda121    # optional; match the CUDA version
-sudo apt install -y build-essential ccache && ccache -M 25G
+sudo apt install -y build-essential git wget tmux ccache && ccache -M 25G
 
 # 3. Build
 bash research/build.sh check                 # inspect the host, change nothing
+
 tmux new -s ptbuild                          # survive a dropped terminal
+conda activate pt230                         # tmux opens a fresh shell: re-activate
 bash research/build.sh                       # shows the plan, asks, then builds
 bash research/build.sh verify
 ```
+
+`conda activate` inside `tmux` is not optional — a new shell has no environment
+active, and `build.sh` stops with `[FAIL] No conda environment active`.
 
 The first build takes 1-4 hours on a laptop CPU and under an hour on a
 workstation. `build.sh` prints its plan and waits for confirmation first, so a
@@ -168,7 +173,7 @@ Three pins are needed because PyTorch 2.3.0 predates breaking changes elsewhere:
 - **`setuptools==69.5.1`** — setuptools >= 80 removed `setup.py develop`, the
   build entry point. The alternative is `pip install --no-build-isolation -v -e .`
 
-`build.sh check` reports both.
+`build.sh check` reports all three.
 
 ## Rebuilding after editing the source
 
@@ -228,12 +233,14 @@ git clean -xfd && git submodule foreach --recursive git clean -xfd
 `torch.__version__` reports **`2.3.0a0+git<sha>`**, not a plain `2.3.0`. That is
 how a source build identifies itself; the suffix is not a failure.
 
-### The build looks frozen around 2900/8290
+### The build looks frozen about a third of the way through
 
-It is not. That range is the FlashAttention kernels, the slowest files in the
-tree: 10-20 minutes each is normal. The question is whether the machine is
-compiling slowly or thrashing. Run `vmstat 5` in a second terminal and read the
-`si`/`so` (swap in/out) and `wa` (I/O wait) columns:
+It is not. Somewhere around 35 % of the ninja steps — step 2900 of 8290 on the
+reference machine, though the total depends on `BUILD_TEST`, `USE_NCCL` and how
+many architectures are being built — come the FlashAttention kernels, the slowest
+files in the tree: 10-20 minutes each is normal. The question is whether the
+machine is compiling slowly or thrashing. Run `vmstat 5` in a second terminal and
+read the `si`/`so` (swap in/out) and `wa` (I/O wait) columns:
 
 | Reading | Meaning | Action |
 |---|---|---|
@@ -256,7 +263,12 @@ After a successful build, capture what it was verified on:
 ```bash
 python torch/utils/collect_env.py > research/env-$(hostname).txt
 bash research/build.sh check >> research/env-$(hostname).txt
+conda list > research/conda-env-$(hostname).txt
 ```
+
+`collect_env.py` is PyTorch's own reporting script. Naming both files after the
+host lets several machines be recorded side by side instead of overwriting each
+other. Add a row to the table below and commit all three changes together.
 
 ## Verified configurations
 
@@ -264,6 +276,11 @@ bash research/build.sh check >> research/env-$(hostname).txt
 |---|---|---|---|---|---|---|---|---|
 | DESKTOP-2ASJTAS (i7-11800H, 16 GB) | RTX 3050 Ti Laptop, 4 GB | 8.6 | Ubuntu 22.04.5 on WSL2 | 12.1 | 8.9.7 | 3.10.21 | 5 | ≈2 h |
 
-Verified 2026-09-20 with `build.sh verify`: `torch 2.3.0a0+git97ff6cf`, CUDA 12.1,
-cuDNN 8907, `sm_86` detected, CUDA matmul, autograd and `torch.profiler` all
-working. Disk used: 2.0 GB in `build/`, 8.6 GB for the whole tree.
+Verified 2026-09-20 with `build.sh verify`: `torch 2.3.0a0+git97ff6cf` (the
+v2.3.0 tag commit), CUDA 12.1, cuDNN 8907, `sm_86` detected, CUDA matmul,
+autograd and `torch.profiler` all working. Disk used: 2.0 GB in `build/`, 8.6 GB
+for the whole tree.
+
+The ≈2 h figure is the final run at `MAX_JOBS=5`, which reused about 2900 objects
+compiled during an earlier aborted attempt. A clean build at `MAX_JOBS=5` on this
+host would take longer — budget 3 hours for 16 GB of RAM with no warm `build/`.
