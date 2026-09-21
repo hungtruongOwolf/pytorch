@@ -113,8 +113,19 @@ detect_gpu() {
         bad "The open-source 'nouveau' driver is loaded; CUDA cannot work"
     fi
     if ! command -v nvidia-smi >/dev/null 2>&1 || ! nvidia-smi -L >/dev/null 2>&1; then
-        bad "nvidia-smi is not working: no usable NVIDIA driver, so a CUDA build is impossible"
-        GPU_DESC="none"
+        GPU_DESC="none visible"
+        # No GPU is only fatal when the architecture has to be detected. A cluster
+        # login node has no GPU but can still compile, provided the caller says
+        # which architecture to target.
+        if [ -n "${TORCH_CUDA_ARCH_LIST:-}" ]; then
+            warn "No GPU visible here, but TORCH_CUDA_ARCH_LIST=$TORCH_CUDA_ARCH_LIST was given, so compiling anyway"
+            warn "The result cannot be tested on this host: run 'build.sh verify' where a GPU is present"
+            NGPU=0
+            [ -z "${USE_NCCL:-}" ] && export USE_NCCL=0
+        else
+            bad "nvidia-smi is not working: no usable NVIDIA driver, and no TORCH_CUDA_ARCH_LIST to compile against"
+            bad "On a GPU machine, install the driver. On a login node, pass the target architecture, e.g. TORCH_CUDA_ARCH_LIST=8.0"
+        fi
         return
     fi
 

@@ -20,7 +20,9 @@ on — nothing here needs editing for a different GPU.
 | RAM | 32 GB comfortable; 16 GB workable but limits `MAX_JOBS` to about 5; 8 GB only with generous swap |
 | Disk | 50 GB minimum, 100 GB comfortable, on **ext4** — not NTFS |
 
-`build.sh check` verifies all of this and refuses to build until it is satisfied.
+`build.sh check` inspects all of this and reports what is missing, changing
+nothing. `build.sh` itself runs the same inspection and refuses to start the
+build while anything is marked `[FAIL]`.
 
 ### On WSL2
 
@@ -66,17 +68,89 @@ WSL2 builds and runs CUDA correctly, but differs from native Linux in five ways.
    returns entries — but measuring a modified kernel properly eventually needs
    native Linux.
 
+## Prerequisites
+
+Four things must exist before the quick start. On a cluster the first three are
+usually provided already — check before installing anything.
+
+**1. Build tools.** `git`, a C++ compiler, `wget`, `tmux` and `ccache`:
+
+```bash
+# with root:
+sudo apt install -y build-essential git wget tmux ccache
+# on a cluster, typically:  module load gcc git
+```
+
+`ccache` is not required but makes every rebuild after the first far cheaper:
+`ccache -M 25G` once, after installing it.
+
+**2. CUDA Toolkit 11.8 or 12.1.** Check first — `nvcc --version`. If a toolkit is
+already present, or `module load cuda/12.1` provides one, skip this; `build.sh`
+finds it on `PATH`.
+
+To install on native Linux (Ubuntu 22.04 shown; substitute your distro's
+repository path):
+
+```bash
+wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+sudo dpkg -i cuda-keyring_1.1-1_all.deb
+sudo apt update
+sudo apt install -y cuda-toolkit-12-1        # NOT the "cuda" metapackage
+```
+
+The `cuda` metapackage pulls in and may downgrade the display driver. Install
+only `cuda-toolkit-12-1`. **Under WSL2 the repository path is different** — see
+the WSL2 section above.
+
+Then put it on `PATH` permanently:
+
+```bash
+echo 'export PATH=/usr/local/cuda-12.1/bin:$PATH' >> ~/.bashrc
+echo 'export LD_LIBRARY_PATH=/usr/local/cuda-12.1/lib64:$LD_LIBRARY_PATH' >> ~/.bashrc
+```
+
+**3. cuDNN 8.9.x**, matching the CUDA major version. PyTorch 2.3.0 supports the
+8.x line only; cuDNN 9 needs PyTorch 2.4 or newer. On native Linux with the CUDA
+apt repository configured, `sudo apt install -y libcudnn8 libcudnn8-dev` is
+enough. Where that package is unavailable — WSL2, or a machine without root —
+use NVIDIA's public redistributable, shown in the WSL2 section above.
+
+Without root, unpack that redistributable under `$HOME` instead of
+`/usr/local/cuda-12.1` and point cmake at it with `CUDNN_ROOT`,
+`CUDNN_INCLUDE_DIR` and `CUDNN_LIBRARY_PATH`. That path has not been tested here;
+building with `USE_CUDNN=0` is the fallback if it gives trouble.
+
+**4. conda**, if the machine has none:
+
+```bash
+wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+bash Miniconda3-latest-Linux-x86_64.sh -b -p $HOME/miniconda3
+$HOME/miniconda3/bin/conda init bash
+exec bash
+```
+
+`-b` runs the installer unattended instead of paging through the licence.
+
 ## Quick start
+
+### A. Using this repository
+
+This is the path for anyone who just wants to build what is already here. The
+branch `research/base-v2.3.0` already contains both the v2.3.0 source tree and
+this `research/` directory.
 
 ```bash
 # 1. Source
 git clone https://github.com/hungtruongOwolf/pytorch.git && cd pytorch
-git remote add upstream https://github.com/pytorch/pytorch.git
-git fetch upstream --tags
-git checkout -b research/base-v2.3.0 v2.3.0
+git checkout research/base-v2.3.0            # the branch already exists remotely
 git submodule sync --recursive
 git submodule update --init --recursive      # after the checkout, not before
+```
 
+Do **not** check out the `v2.3.0` tag directly. The tag predates this directory,
+so the working tree would have no `research/build.sh` to run.
+
+```bash
 # 2. Environment
 # conda-forge only: the Anaconda default channels now require accepting a
 # commercial Terms of Service, which university use should not need to touch.
@@ -88,7 +162,6 @@ pip install "numpy<2" "setuptools==69.5.1"   # see Version pins below
 conda install -y --override-channels -c conda-forge "cmake<4" ninja
 conda install -y --override-channels -c conda-forge mkl-static mkl-include
 conda install -y -c pytorch magma-cuda121    # optional; match the CUDA version
-sudo apt install -y build-essential git wget tmux ccache && ccache -M 25G
 
 # 3. Build
 bash research/build.sh check                 # inspect the host, change nothing
@@ -102,9 +175,32 @@ bash research/build.sh verify
 `conda activate` inside `tmux` is not optional — a new shell has no environment
 active, and `build.sh` stops with `[FAIL] No conda environment active`.
 
+Match `magma-cuda121` to the installed CUDA: use `magma-cuda118` with CUDA 11.8.
+It is optional — if the solver struggles, skip it. Only some `torch.linalg`
+operations on CUDA are affected.
+
 The first build takes 1-4 hours on a laptop CPU and under an hour on a
 workstation. `build.sh` prints its plan and waits for confirmation first, so a
 misdetected setting costs seconds rather than hours.
+
+### B. Recreating the branch from upstream
+
+Only needed to start a fresh branch from the v2.3.0 tag — for example on a new
+fork. This is how `research/base-v2.3.0` was created:
+
+```bash
+git clone https://github.com/<your-fork>/pytorch.git && cd pytorch
+git remote add upstream https://github.com/pytorch/pytorch.git
+git fetch upstream --tags                    # forks copy the default branch only,
+                                             # so the v2.3.0 tag is not inherited
+git checkout -b research/base-v2.3.0 v2.3.0
+git submodule sync --recursive
+git submodule update --init --recursive
+```
+
+Then copy this `research/` directory in and commit it. Pushing a branch based on
+an old tag needs a token with the `workflow` scope, because it creates files
+under `.github/workflows/`.
 
 ## What build.sh detects
 
@@ -126,6 +222,24 @@ why this is detected rather than written down.
 
 On a cluster that provides CUDA through environment modules, `module load
 cuda/12.1` is enough: `build.sh` finds it on `PATH`.
+
+### Building where no GPU is visible
+
+A cluster login node usually has no GPU, so architecture detection cannot work
+and `build.sh` stops. Compiling there is still legitimate — name the target
+architecture explicitly and it proceeds with a warning:
+
+```bash
+TORCH_CUDA_ARCH_LIST="8.0" bash research/build.sh     # A100
+TORCH_CUDA_ARCH_LIST="9.0" bash research/build.sh     # H100
+```
+
+Look the value up with `nvidia-smi --query-gpu=compute_cap --format=csv,noheader`
+on a compute node, or from NVIDIA's compute-capability table. Getting it wrong
+produces a build that finishes and then fails at run time with `no kernel image
+is available for execution on the device`.
+
+Run `build.sh verify` on a node that has the GPU, not on the login node.
 
 `MAX_JOBS` is a ceiling, not a target to beat. The 2 GB-per-job estimate holds
 for ordinary sources, but the FlashAttention kernels under
