@@ -11,7 +11,7 @@ on — nothing here needs editing for a different GPU.
 
 | | |
 |---|---|
-| OS | Linux (Ubuntu 22.04 LTS verified; other distros need their own package commands) |
+| OS | Linux — native, on a cluster, or under WSL2. Ubuntu 22.04 LTS verified; other distros need their own package commands |
 | GPU | NVIDIA, with the proprietary driver loaded — `nvidia-smi` must work |
 | Driver | >= 530.30.02 for CUDA 12.1, or >= 520.61.05 for CUDA 11.8 |
 | CUDA Toolkit | 11.8 or 12.1 (the versions PyTorch 2.3.0 officially targets) |
@@ -24,72 +24,66 @@ on — nothing here needs editing for a different GPU.
 nothing. `build.sh` itself runs the same inspection and refuses to start the
 build while anything is marked `[FAIL]`.
 
-### On WSL2
-
-WSL2 builds and runs CUDA correctly, but differs from native Linux in five ways.
-`build.sh` detects WSL and warns; the three setup steps below are manual:
-
-1. **Never install an NVIDIA driver inside WSL.** The GPU is borrowed from the
-   Windows driver — that is why `nvidia-smi` works with no Linux driver present.
-   Installing one breaks the passthrough. Use NVIDIA's WSL-specific CUDA
-   repository, which ships no driver packages:
-   `…/compute/cuda/repos/wsl-ubuntu/x86_64/cuda-keyring_1.1-1_all.deb`, then
-   `sudo apt install -y cuda-toolkit-12-1`. Never the `cuda` metapackage, which
-   would pull a driver in.
-2. **cuDNN is not in the `wsl-ubuntu` repository**, so `libcudnn8` cannot be
-   installed with apt. Use NVIDIA's public redistributable instead, which needs
-   no account, and unpack it next to CUDA so cmake finds it:
-   ```bash
-   wget https://developer.download.nvidia.com/compute/cudnn/redist/cudnn/linux-x86_64/cudnn-linux-x86_64-8.9.7.29_cuda12-archive.tar.xz
-   tar -xf cudnn-linux-x86_64-8.9.7.29_cuda12-archive.tar.xz
-   sudo cp -P cudnn-*/include/cudnn*.h /usr/local/cuda-12.1/include/
-   sudo cp -P cudnn-*/lib/libcudnn*    /usr/local/cuda-12.1/lib64/
-   sudo chmod a+r /usr/local/cuda-12.1/include/cudnn*.h /usr/local/cuda-12.1/lib64/libcudnn*
-   sudo ldconfig
-   ```
-   `cp -P` is required: it preserves the `libcudnn.so → .so.8 → .so.8.9.7`
-   symlink chain, which a plain copy would flatten and break.
-3. **WSL gets half the host's RAM by default**, which starves `MAX_JOBS`. Raise it
-   in `C:\Users\<name>\.wslconfig` on the Windows side, then `wsl --shutdown`:
-   ```ini
-   [wsl2]
-   memory=12GB
-   swap=24GB
-   processors=16
-   ```
-   The large swap matters more than the memory: it is what keeps a peak link step
-   from being OOM-killed an hour into a build.
-
-4. **The repository must live in the Linux filesystem** (`~/pytorch`). Building
-   from `/mnt/c` or `/mnt/e` is 10-50x slower through the translation layer, and
-   NTFS is case-insensitive, which breaks the build outright.
-5. **Kernel profiling is restricted.** CUPTI and Nsight hardware counters are
-   limited under WSL2. This does not affect building — `torch.profiler` still
-   returns entries — but measuring a modified kernel properly eventually needs
-   native Linux.
-
 ## Prerequisites
 
-Four things must exist before the quick start. On a cluster the first three are
-usually provided already — check before installing anything.
+Five things must exist before the quick start. Each is shown for the three
+environments this is expected to run in:
 
-**1. Build tools.** `git`, a C++ compiler, `wget`, `tmux` and `ccache`:
+| | |
+|---|---|
+| **Native Linux** | a workstation or server where you have `sudo` |
+| **Cluster** | a shared Linux machine with no root, software via `module load` |
+| **WSL2** | Ubuntu inside Windows |
+
+Check each item before installing anything — on a cluster, most are already
+provided.
+
+### 1. NVIDIA driver
+
+Check: `nvidia-smi` must print a table of GPUs.
+
+**Native Linux** — if it prints nothing, or `lsmod | grep nouveau` shows the
+open-source driver is loaded, CUDA cannot work:
 
 ```bash
-# with root:
-sudo apt install -y build-essential git wget tmux ccache
-# on a cluster, typically:  module load gcc git
+ubuntu-drivers devices              # shows the recommended driver
+sudo ubuntu-drivers install         # or: sudo apt install nvidia-driver-550
+sudo reboot
 ```
 
-`ccache` is not required but makes every rebuild after the first far cheaper:
-`ccache -M 25G` once, after installing it.
+If the module still will not load afterwards, Secure Boot is blocking it: enroll
+the MOK key when prompted at the next boot, or disable Secure Boot in the UEFI
+settings.
 
-**2. CUDA Toolkit 11.8 or 12.1.** Check first — `nvcc --version`. If a toolkit is
-already present, or `module load cuda/12.1` provides one, skip this; `build.sh`
-finds it on `PATH`.
+**WSL2** — install the driver **on Windows**, never inside WSL. The GPU is
+borrowed from the Windows driver, which is why `nvidia-smi` works in WSL with no
+Linux driver present. Installing a Linux driver inside WSL breaks the passthrough
+and the distribution has to be reinstalled.
 
-To install on native Linux (Ubuntu 22.04 shown; substitute your distro's
-repository path):
+**Cluster** — already installed. If `nvidia-smi` fails on a login node that is
+expected, since login nodes usually have no GPU; see *Building where no GPU is
+visible* below.
+
+### 2. Build tools
+
+`git`, a C++ compiler, `wget`, `tmux` and `ccache`.
+
+```bash
+# Native Linux and WSL2:
+sudo apt install -y build-essential git wget tmux ccache
+
+# Cluster, typically:
+module load gcc git
+```
+
+`ccache` is optional but makes every rebuild after the first far cheaper. Give it
+room once installed: `ccache -M 25G`.
+
+### 3. CUDA Toolkit 11.8 or 12.1
+
+Check: `nvcc --version`. These are the versions PyTorch 2.3.0 officially targets.
+
+**Native Linux** (Ubuntu 22.04 shown; substitute your distro's repository path):
 
 ```bash
 wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
@@ -98,29 +92,70 @@ sudo apt update
 sudo apt install -y cuda-toolkit-12-1        # NOT the "cuda" metapackage
 ```
 
-The `cuda` metapackage pulls in and may downgrade the display driver. Install
-only `cuda-toolkit-12-1`. **Under WSL2 the repository path is different** — see
-the WSL2 section above.
+**WSL2** — identical, except the repository path is `wsl-ubuntu`, which ships no
+driver packages:
 
-Then put it on `PATH` permanently:
+```bash
+wget https://developer.download.nvidia.com/compute/cuda/repos/wsl-ubuntu/x86_64/cuda-keyring_1.1-1_all.deb
+sudo dpkg -i cuda-keyring_1.1-1_all.deb
+sudo apt update
+sudo apt install -y cuda-toolkit-12-1
+```
+
+In both cases install `cuda-toolkit-12-1`, never the `cuda` metapackage: that one
+pulls in a driver and may downgrade the one already installed. Under WSL2 that
+would break the GPU passthrough outright.
+
+**Cluster** — `module load cuda/12.1`. `build.sh` finds it on `PATH`, no further
+configuration needed.
+
+After a manual install, put it on `PATH` permanently:
 
 ```bash
 echo 'export PATH=/usr/local/cuda-12.1/bin:$PATH' >> ~/.bashrc
 echo 'export LD_LIBRARY_PATH=/usr/local/cuda-12.1/lib64:$LD_LIBRARY_PATH' >> ~/.bashrc
 ```
 
-**3. cuDNN 8.9.x**, matching the CUDA major version. PyTorch 2.3.0 supports the
-8.x line only; cuDNN 9 needs PyTorch 2.4 or newer. On native Linux with the CUDA
-apt repository configured, `sudo apt install -y libcudnn8 libcudnn8-dev` is
-enough. Where that package is unavailable — WSL2, or a machine without root —
-use NVIDIA's public redistributable, shown in the WSL2 section above.
+### 4. cuDNN 8.9.x
 
-Without root, unpack that redistributable under `$HOME` instead of
-`/usr/local/cuda-12.1` and point cmake at it with `CUDNN_ROOT`,
+Matching the CUDA major version. PyTorch 2.3.0 supports the 8.x line only —
+cuDNN 9 needs PyTorch 2.4 or newer.
+
+Check: `grep CUDNN_MAJOR /usr/local/cuda-12.1/include/cudnn_version.h`
+
+**Native Linux**, with the CUDA apt repository from step 3 configured:
+
+```bash
+sudo apt install -y libcudnn8 libcudnn8-dev
+```
+
+**WSL2** — `libcudnn8` is not in the `wsl-ubuntu` repository. Use NVIDIA's public
+redistributable, which needs no account, and unpack it next to CUDA so cmake
+finds it there:
+
+```bash
+wget https://developer.download.nvidia.com/compute/cudnn/redist/cudnn/linux-x86_64/cudnn-linux-x86_64-8.9.7.29_cuda12-archive.tar.xz
+tar -xf cudnn-linux-x86_64-8.9.7.29_cuda12-archive.tar.xz
+sudo cp -P cudnn-*/include/cudnn*.h /usr/local/cuda-12.1/include/
+sudo cp -P cudnn-*/lib/libcudnn*    /usr/local/cuda-12.1/lib64/
+sudo chmod a+r /usr/local/cuda-12.1/include/cudnn*.h /usr/local/cuda-12.1/lib64/libcudnn*
+sudo ldconfig
+```
+
+`cp -P` is required: it preserves the `libcudnn.so → .so.8 → .so.8.9.7` symlink
+chain, which a plain copy would flatten and break. Use the `_cuda11` tarball
+instead if building against CUDA 11.8.
+
+**Cluster** — usually provided with the CUDA module. Without root and without a
+module, unpack the same redistributable under `$HOME` rather than
+`/usr/local/cuda-12.1`, and point cmake at it with `CUDNN_ROOT`,
 `CUDNN_INCLUDE_DIR` and `CUDNN_LIBRARY_PATH`. That path has not been tested here;
-building with `USE_CUDNN=0` is the fallback if it gives trouble.
+`USE_CUDA=1 USE_CUDNN=0 bash research/build.sh` is the fallback if it gives
+trouble — the build works without cuDNN, with slower convolutions.
 
-**4. conda**, if the machine has none:
+### 5. conda
+
+Check: `conda --version`. Same on all three environments:
 
 ```bash
 wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
@@ -129,7 +164,35 @@ $HOME/miniconda3/bin/conda init bash
 exec bash
 ```
 
-`-b` runs the installer unattended instead of paging through the licence.
+`-b` runs the installer unattended instead of paging through the licence. On a
+cluster, check for a conda or Miniforge module first.
+
+### Extra steps on WSL2 only
+
+Three further things apply under WSL2 and nowhere else. `build.sh` detects WSL
+and warns about them, but the fixes are manual.
+
+**Give WSL more RAM.** It takes half the host's by default, which starves
+`MAX_JOBS`. Create `C:\Users\<name>\.wslconfig` on the Windows side, then run
+`wsl --shutdown` in PowerShell and reopen Ubuntu:
+
+```ini
+[wsl2]
+memory=12GB
+swap=24GB
+processors=16
+```
+
+The large swap matters more than the memory: it is what keeps a peak link step
+from being OOM-killed an hour into a build. Confirm with `free -h` afterwards.
+
+**Keep the repository in the Linux filesystem** (`~/pytorch`). Building from
+`/mnt/c` or `/mnt/e` is 10-50x slower through the translation layer, and NTFS is
+case-insensitive, which breaks the build outright.
+
+**Kernel profiling is restricted.** CUPTI and Nsight hardware counters are limited
+under WSL2. Building is unaffected and `torch.profiler` still returns entries,
+but measuring a modified kernel properly eventually needs native Linux.
 
 ## Quick start
 
