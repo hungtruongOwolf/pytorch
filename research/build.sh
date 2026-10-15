@@ -6,10 +6,15 @@
 #   bash research/build.sh            inspect, show the plan, confirm, then build
 #   bash research/build.sh verify     check that an existing build works
 #
+# This script never installs anything. On a new machine run
+# 'bash research/setup.sh' once first: it installs CUDA 12.1, cuDNN, conda and the
+# rest, and writes ~/.pt230-env.sh, which this script reads.
+#
 # Every machine-dependent setting is detected from this host, so no edit is
 # needed when moving to a different GPU. Any setting can be overridden:
 #
-#   MAX_JOBS=32 bash research/build.sh
+#   MAX_JOBS=32 bash research/build.sh        (default is min(CPUs, RAM/2, JOBS_CAP=16))
+#   ALLOW_UNTESTED_CUDA=1 bash research/build.sh   build with a CUDA other than 11.8/12.1
 #   TORCH_CUDA_ARCH_LIST="9.0" bash research/build.sh
 #   ARCH_PTX=1 bash research/build.sh        also embed PTX for newer GPUs
 #   BUILD_TEST=1 bash research/build.sh      also build the C++ test binaries
@@ -35,9 +40,22 @@ die()   { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 
 case "$MODE" in
     check|build|verify) ;;
-    -h|--help|help) sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help|help) sed -n '2,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown mode '$MODE' (expected: check, build, verify)" ;;
 esac
+
+# Read the choices 'setup.sh' recorded (which CUDA, which conda environment), so a
+# bare shell or a fresh tmux window needs no manual 'conda activate'. Without the
+# file, everything below falls back to detecting from PATH, as before.
+ENV_FILE="${ENV_FILE:-$HOME/.pt230-env.sh}"
+load_env_file() {
+    [ -r "$ENV_FILE" ] || return 0
+    # conda's activate scripts reference unset variables, which 'set -u' rejects.
+    set +u
+    # shellcheck disable=SC1090
+    . "$ENV_FILE"
+    set -u
+}
 
 # =============================================================== detection ===
 
@@ -71,8 +89,12 @@ detect_cpu_ram() {
     # peak higher. RAM, not core count, is the binding constraint: oversubscribe
     # it and the linker gets OOM-killed an hour into the build.
     if [ -z "${MAX_JOBS:-}" ]; then
-        local by_ram=$(( RAM_GB / 2 ))
+        local by_ram=$(( RAM_GB / 2 )) cap="${JOBS_CAP:-16}"
         MAX_JOBS=$(( by_ram < CPUS ? by_ram : CPUS ))
+        # A 48-core server with 125 GB would otherwise get 48 jobs. The heaviest
+        # sources (FlashAttention, 3-6 GB each on the laptop) could then exhaust RAM
+        # on a host with no swap, and the OOM killer ends the build without a message.
+        [ "$MAX_JOBS" -gt "$cap" ] && MAX_JOBS="$cap"
         [ "$MAX_JOBS" -lt 1 ] && MAX_JOBS=1
     fi
     export MAX_JOBS
@@ -194,7 +216,12 @@ detect_cuda() {
         ok "nvcc $CUDA_VERSION at $CUDA_HOME"
         case "$CUDA_VERSION" in
             11.8|12.1) ok "CUDA $CUDA_VERSION is officially supported by PyTorch 2.3.0" ;;
-            *) warn "PyTorch 2.3.0 officially targets CUDA 11.8 and 12.1; $CUDA_VERSION may need patches" ;;
+            *)
+                if [ "${ALLOW_UNTESTED_CUDA:-0}" = "1" ]; then
+                    warn "CUDA $CUDA_VERSION is not one PyTorch 2.3.0 targets (11.8, 12.1); continuing because ALLOW_UNTESTED_CUDA=1"
+                else
+                    bad "CUDA $CUDA_VERSION found at $CUDA_HOME, but PyTorch 2.3.0 targets 11.8 and 12.1. Run 'bash research/setup.sh' (installs 12.1 beside it), or set ALLOW_UNTESTED_CUDA=1"
+                fi ;;
         esac
     else
         CUDA_VERSION=""
@@ -206,11 +233,14 @@ detect_cuda() {
     # targets/<arch>/include, and find does not follow symlinks given as
     # arguments unless told to.
     local cudnn_h
-    cudnn_h="$(find -L /usr/include /usr/local/cuda*/include -maxdepth 1 -name cudnn_version.h 2>/dev/null | head -1)"
+    # CUDA_HOME comes first: setup.sh unpacks cuDNN into the toolkit it installed.
+    cudnn_h="$(find -L "${CUDA_HOME:-/nonexistent}/include" /usr/include /usr/local/cuda*/include -maxdepth 1 -name cudnn_version.h 2>/dev/null | head -1)"
     if [ -n "$cudnn_h" ]; then
         ok "cuDNN $(awk '/define CUDNN_MAJOR|define CUDNN_MINOR|define CUDNN_PATCHLEVEL/ {printf "%s.", $3}' "$cudnn_h" | sed 's/\.$//')"
+    elif [ "${USE_CUDNN:-1}" = "0" ]; then
+        warn "cuDNN headers not found; building without cuDNN because USE_CUDNN=0"
     else
-        warn "cuDNN headers not found; install libcudnn8-dev, or build with USE_CUDNN=0"
+        bad "cuDNN headers not found: run 'bash research/setup.sh', or set USE_CUDNN=0 to build without it"
     fi
     export USE_CUDNN="${USE_CUDNN:-$USE_CUDA}"
 }
@@ -255,6 +285,49 @@ detect_compiler() {
     bad "gcc $have exceeds CUDA $CUDA_VERSION's maximum ($gcc_max). Run: sudo apt install -y gcc-$gcc_max g++-$gcc_max"
 }
 
+# Compile and link one trivial kernel with the exact nvcc, host compiler and
+# architecture the build will use. A toolchain mismatch (a host compiler or C
+# library too new for this CUDA) shows up here in seconds, instead of an hour into
+# the build.
+detect_nvcc_smoke() {
+    group "CUDA compile test"
+    [ -n "${CUDA_VERSION:-}" ] || { warn "No CUDA toolkit, skipping"; return; }
+    local arch tmp host
+    arch="${TORCH_CUDA_ARCH_LIST:-}"; arch="${arch%% *}"; arch="${arch%%+*}"; arch="${arch//./}"
+    if [ -z "$arch" ]; then warn "No target architecture known, skipping"; return; fi
+    tmp="$(mktemp -d)"
+    cat >"$tmp/t.cu" <<'CU'
+#include <cuda_runtime.h>
+#include <cmath>
+#include <cstdio>
+// rsqrtf and cospif are the functions CUDA's math headers and a newer C library
+// have been known to disagree about; using them forces that header path.
+__global__ void k(float* x) { x[0] = rsqrtf(x[0]) + cospif(x[0]); }
+int main() {
+    float* d = nullptr;
+    if (cudaMalloc(&d, sizeof(float)) != cudaSuccess) { printf("no device\n"); return 2; }
+    cudaMemset(d, 0, sizeof(float));
+    k<<<1, 1>>>(d);
+    cudaError_t e = cudaDeviceSynchronize();
+    printf("%s\n", cudaGetErrorString(e));
+    return e == cudaSuccess ? 0 : 1;
+}
+CU
+    host="${CUDAHOSTCXX:-$(command -v g++)}"
+    if "$CUDA_HOME/bin/nvcc" -ccbin "$host" -gencode "arch=compute_${arch},code=sm_${arch}" \
+            -o "$tmp/t" "$tmp/t.cu" >"$tmp/log" 2>&1; then
+        ok "nvcc with $host compiles and links a kernel for sm_${arch}"
+        if [ "${NGPU:-0}" -gt 0 ]; then
+            if "$tmp/t" >"$tmp/run" 2>&1; then ok "...and the kernel runs on the GPU"
+            else warn "The test kernel did not run ($(head -1 "$tmp/run")); expected only if the target architecture differs from the installed GPU"; fi
+        fi
+    else
+        bad "nvcc with $host cannot compile a trivial kernel for sm_${arch}:"
+        head -8 "$tmp/log" | sed 's/^/          /'
+    fi
+    rm -rf "$tmp"
+}
+
 detect_tooling() {
     group "Build tooling"
     local t
@@ -281,7 +354,7 @@ detect_tooling() {
         bad "cmake missing"
     fi
     if command -v ccache >/dev/null 2>&1; then
-        ok "ccache present, max size $(ccache -p 2>/dev/null | awk '/max_size/ {print $NF}' | head -1)"
+        ok "ccache present, max size $(ccache -p 2>/dev/null | awk -F'= ' '/max_size/ {print $2; exit}')"
         export CMAKE_C_COMPILER_LAUNCHER=ccache
         export CMAKE_CXX_COMPILER_LAUNCHER=ccache
         export CMAKE_CUDA_COMPILER_LAUNCHER=ccache
@@ -295,7 +368,7 @@ detect_tooling() {
 detect_python() {
     group "Python environment"
     if [ -z "${CONDA_PREFIX:-}" ]; then
-        bad "No conda environment active: run 'conda activate pt230' first (BUILD.md quick start)"
+        bad "No conda environment active: run 'bash research/setup.sh' once, or 'conda activate pt230'"
         return
     fi
     ok "conda env $CONDA_PREFIX"
@@ -404,46 +477,19 @@ run_build() {
 run_verify() {
     # Run from outside the source tree: inside it, `import torch` resolves to the
     # source folder rather than the built extension and fails confusingly.
+    # A source build reports 2.3.0a0+git<sha>, not a plain 2.3.0; verify.py accepts that.
+    local script="$REPO_ROOT/research/verify.py"
+    [ -r "$script" ] || die "missing $script"
     cd "$HOME" || cd / || true
-    python - <<'PY'
-import torch
-print("torch version :", torch.__version__)
-print("built w/ CUDA :", torch.version.cuda)
-print("cuDNN         :", torch.backends.cudnn.version())
-print("CUDA available:", torch.cuda.is_available())
-if torch.cuda.is_available():
-    print("device        :", torch.cuda.get_device_name(0))
-    print("capability    :", torch.cuda.get_device_capability(0))
-
-    a = torch.randn(2048, 2048, device="cuda")
-    b = a @ a
-    torch.cuda.synchronize()
-    print("matmul ok     :", tuple(b.shape))
-
-    x = torch.randn(64, 64, device="cuda", requires_grad=True)
-    (x * x).sum().backward()
-    torch.cuda.synchronize()
-    print("autograd ok   :", tuple(x.grad.shape))
-
-    from torch.profiler import profile, ProfilerActivity
-    with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as p:
-        (a @ a).sum().item()
-    rows = p.key_averages()
-    print("profiler ok   :", len(rows), "entries")
-else:
-    raise SystemExit("CUDA is not available: see BUILD.md troubleshooting")
-
-# A source build reports 2.3.0a0+git<sha>, not a plain 2.3.0. The suffix is
-# expected and is not a failure.
-assert torch.__version__.startswith("2.3.0"), torch.__version__
-print("\nAll checks passed.")
-PY
+    python "$script"
 }
 
 # ==================================================================== main ===
 
 printf 'PyTorch v2.3.0 source build -- %s\n' "$MODE"
 printf 'host %s, %s\n' "$(hostname 2>/dev/null)" "$(date -Is 2>/dev/null)"
+
+load_env_file
 
 if [ "$MODE" = "verify" ]; then
     run_verify
@@ -456,6 +502,7 @@ detect_disk
 detect_gpu
 detect_cuda
 detect_compiler
+detect_nvcc_smoke
 detect_tooling
 detect_python
 detect_source
