@@ -13,6 +13,11 @@ every machine has to build it once. Three files in `research/` do the work:
 
 Nothing here needs editing for a different GPU.
 
+This repository holds only the PyTorch build. The distributed-training experiments that
+run on top of it (Megatron-LM, pipeline parallelism on two nodes) live in a separate
+repository, [pipeline-parallel-training](https://github.com/hungtruongOwolf/pipeline-parallel-training):
+build PyTorch here first, then use that one.
+
 ## Start here
 
 | Step | Command | How long |
